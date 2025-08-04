@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Didy cứu Hồng Tỷ – Hero Edition</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<style>
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background: linear-gradient(135deg,#0f1023,#1f2145);
+    font-family: system-ui,-apple-system,BlinkMacSystemFont;
+    color:#eee;
+    overflow:hidden;
+  }
+  #game{
+    display:block;
+    margin:0 auto;
+    background:#1f1f3d;
+    border:4px solid #444;
+    border-radius:10px;
+    touch-action:none;
+  }
+  #status{
+    position:fixed;
+    top:8px;
+    left:50%;
+    transform:translateX(-50%);
+    background:rgba(0,0,0,0.6);
+    padding:6px 16px;
+    border-radius:12px;
+    font-size:14px;
+    display:flex;
+    gap:8px;
+    align-items:center;
+    z-index:2;
+  }
+  .controls{
+    position:fixed;
+    bottom:12px;
+    left:50%;
+    transform:translateX(-50%);
+    display:flex;
+    gap:12px;
+    z-index:2;
+  }
+  .btn{
+    width:60px;
+    height:60px;
+    border-radius:50%;
+    background:rgba(255,255,255,0.08);
+    border:2px solid #fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:22px;
+    font-weight:700;
+    user-select:none;
+    color:#fff;
+    touch-action:none;
+    position:relative;
+    box-shadow:0 0 14px rgba(255,255,255,0.08);
+  }
+  #overlay{
+    position:fixed;
+    inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    background:rgba(0,0,0,0.85);
+    gap:14px;
+    text-align:center;
+    padding:0 20px;
+    z-index:3;
+  }
+  button.primary{
+    background:#ffcc3f;
+    border:none;
+    padding:14px 32px;
+    border-radius:999px;
+    font-size:16px;
+    cursor:pointer;
+    font-weight:700;
+    color:#222;
+  }
+  .small{font-size:12px; opacity:0.8;}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="500"></canvas>
+<div id="status">Mục tiêu: Cứu Hồng Tỷ</div>
+<div class="controls">
+  <div class="btn" id="left">◀</div>
+  <div class="btn" id="jump">▲</div>
+  <div class="btn" id="right">▶</div>
+</div>
+<div id="overlay">
+  <div style="font-size:32px;font-weight:700;">Didy cứu Hồng Tỷ</div>
+  <div>Hero Edition: điều khiển, vượt chướng ngại và cứu Hồng Tỷ.</div>
+  <div class="small">Trái/Phải để đi, ▲ để nhảy. Né gai đỏ và quái tím.</div>
+  <button id="startBtn" class="primary">Bắt đầu</button>
+</div>
+
+<script>
+// âm thanh đơn giản
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const audio = new AudioCtx();
+function tone(freq,dur,type="sine",vol=0.2){
+  const o=audio.createOscillator();
+  const g=audio.createGain();
+  o.type=type; o.frequency.value=freq;
+  g.gain.value=vol;
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime+dur);
+}
+function playJump(){ tone(500,0.08,"triangle",0.18); }
+function playHit(){ tone(160,0.25,"square",0.35); }
+function playWin(){ tone(880,0.12); setTimeout(()=>tone(660,0.12),150); }
+function playLose(){ tone(140,0.3,"sawtooth",0.25); }
+
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const W=canvas.width, H=canvas.height;
+
+let keys={left:false,right:false,jump:false};
+const hero={
+  x:50, y:H-140, w:48, h:56,
+  vy:0, onGround:false,
+  dir:1, // facing
+  frame:0, anim:0
+};
+const gravity=1.0;
+const speed=4.5;
+const jumpPower=16;
+
+const spikes=[
+  {x:260,y:H-100,w:40,h:20},
+  {x:320,y:H-100,w:40,h:20},
+  {x:380,y:H-100,w:40,h:20},
+];
+const enemy={x:500,y:H-100-30,w:32,h:32,dir:1};
+const target={x:W-120,y:H-100-40,w:44,h:44};
+
+let gameState="start"; // start, playing, win, lose
+
+const platforms=[
+  {x:0,y:H-100,w:W,h:100},
+  {x:240,y:H-220,w:160,h:20},
+  {x:460,y:H-320,w:120,h:20},
+];
+
+// va chạm chữ nhật
+function collide(a,b){
+  return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h);
+}
+
+// vẽ hero phong cách đơn giản có khiên và đầu
+function drawHero(o){
+  ctx.save();
+  // thân
+  ctx.fillStyle="#f0e9d8";
+  ctx.fillRect(o.x, o.y+10, o.w, o.h-10);
+  // áo giáp overlay
+  ctx.fillStyle="#3366cc";
+  ctx.fillRect(o.x, o.y+10, o.w, 12);
+  // đầu
+  ctx.fillStyle="#ffe0b0";
+  ctx.beginPath();
+  ctx.arc(o.x + o.w/2, o.y+6, 10, 0, Math.PI*2);
+  ctx.fill();
+  // mắt
+  ctx.fillStyle="#222";
+  ctx.beginPath();
+  ctx.arc(o.x + o.w*0.35, o.y+6, 2.5,0,Math.PI*2);
+  ctx.arc(o.x + o.w*0.65, o.y+6, 2.5,0,Math.PI*2);
+  ctx.fill();
+  // thanh kiếm (bên phải) nếu di chuyển hướng phải
+  ctx.fillStyle="#ccc";
+  ctx.fillRect(o.x + o.w - 6, o.y + o.h/2 - 4, 4, 20);
+  ctx.fillStyle="#ffaa00";
+  ctx.fillRect(o.x + o.w - 8, o.y + o.h/2 - 8, 8, 4);
+  // khiên ở tay trái
+  ctx.fillStyle="#888";
+  ctx.beginPath();
+  ctx.moveTo(o.x - 4, o.y + o.h/2 - 10);
+  ctx.lineTo(o.x + 8, o.y + o.h/2 - 10);
+  ctx.lineTo(o.x + 8, o.y + o.h/2 + 10);
+  ctx.lineTo(o.x -4, o.y + o.h/2 + 10);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function reset(){
+  hero.x=50; hero.y=H-140; hero.vy=0; hero.onGround=false; enemy.x=500; enemy.dir=1;
+  gameState="playing";
+  document.getElementById("overlay").style.display="none";
+  document.getElementById("status").textContent="Mục tiêu: Cứu Hồng Tỷ";
+}
+
+function update(){
+  if(gameState!=="playing") return;
+  // di chuyển ngang
+  if(keys.left){ hero.x -= speed; hero.dir=-1; }
+  if(keys.right){ hero.x += speed; hero.dir=1; }
+  // giới hạn
+  if(hero.x < 0) hero.x=0;
+  if(hero.x + hero.w > W) hero.x = W - hero.w;
+
+  // nhảy
+  if(keys.jump && hero.onGround){
+    hero.vy = -jumpPower;
+    hero.onGround=false;
+    playJump();
+  }
+  hero.vy += gravity;
+  hero.y += hero.vy;
+  hero.onGround=false;
+  // va chạm nền/phải
+  for(const p of platforms){
+    if(hero.x + hero.w > p.x && hero.x < p.x + p.w){
+      // từ trên rơi xuống
+      if(hero.y + hero.h > p.y && hero.y + hero.h - hero.vy <= p.y){
+        hero.y = p.y - hero.h;
+        hero.vy=0;
+        hero.onGround=true;
+      }
+    }
+  }
+  // sàn
+  if(hero.y + hero.h > H-100){
+    hero.y = H-100 - hero.h;
+    hero.vy=0;
+    hero.onGround=true;
+  }
+
+  // enemy tuần tra
+  enemy.x += enemy.dir * 2;
+  if(enemy.x < 440) enemy.dir=1;
+  if(enemy.x > 560) enemy.dir=-1;
+
+  // va chạm
+  for(const s of spikes){
+    if(collide(hero, {x:s.x,y:s.y-s.h,w:s.w,h:s.h})){
+      gameState="lose";
+      playHit();
+    }
+  }
+  if(collide(hero, enemy)){
+    gameState="lose";
+    playHit();
+  }
+  if(collide(hero, target)){
+    gameState="win";
+    playWin();
+  }
+}
+
+function draw(){
+  // nền
+  ctx.fillStyle="#1f2055";
+  ctx.fillRect(0,0,W,H);
+  // nền đất
+  for(const p of platforms){
+    ctx.fillStyle="#3f3f5f";
+    ctx.fillRect(p.x,p.y,p.w,p.h);
+    // viền
+    ctx.strokeStyle="#67678f";
+    ctx.lineWidth=2;
+    ctx.strokeRect(p.x,p.y,p.w,p.h);
+  }
+  // gai
+  spikes.forEach(s=>{
+    ctx.fillStyle="#e65555";
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(s.x + s.w/2, s.y - s.h);
+    ctx.lineTo(s.x + s.w, s.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle="#a03030";
+    ctx.lineWidth=2;
+    ctx.stroke();
+  });
+  // quái
+  ctx.fillStyle="#a050f0";
+  ctx.fillRect(enemy.x, enemy.y, enemy.w, enemy.h);
+  ctx.strokeStyle="#6f30a0";
+  ctx.lineWidth=2;
+  ctx.strokeRect(enemy.x, enemy.y, enemy.w, enemy.h);
+  // Hồng Tỷ
+  ctx.fillStyle="#40f050";
+  ctx.fillRect(target.x, target.y, target.w, target.h);
+  ctx.strokeStyle="#2f8f30";
+  ctx.lineWidth=3;
+  ctx.strokeRect(target.x, target.y, target.w, target.h);
+  // hero
+  drawHero(hero);
+
+  // HUD
+  if(gameState==="playing"){
+    document.getElementById("status").textContent="Mục tiêu: Cứu Hồng Tỷ ở cuối hang";
+  } else if(gameState==="win"){
+    document.getElementById("status").textContent="Đã cứu Hồng Tỷ! Chạm để chơi lại";
+  } else if(gameState==="lose"){
+    document.getElementById("status").textContent="Didy bị thương! Chạm để chơi lại";
+  }
+}
+
+function loop(){
+  update();
+  draw();
+  if(gameState==="win" || gameState==="lose"){
+    const overlay=document.getElementById("overlay");
+    overlay.style.display="flex";
+    const msg= gameState==="win" ? "Bạn đã cứu Hồng Tỷ!" : "Didy bị thương!";
+    overlay.innerHTML=`
+      <div style="font-size:28px;font-weight:600;">${msg}</div>
+      <div class="small">${gameState==="win" ? "Hồng Tỷ được cứu. Chạm để chơi lại." : "Bạn thua rồi. Chạm để chơi lại."}</div>
+      <button id="retry" class="primary">Chơi lại</button>
+    `;
+    document.getElementById("retry").onclick=()=>{ reset(); };
+    gameState="paused";
+  }
+  requestAnimationFrame(loop);
+}
+
+// điều khiển cảm ứng
+const leftBtn=document.getElementById("left");
+const rightBtn=document.getElementById("right");
+const jumpBtn=document.getElementById("jump");
+leftBtn.addEventListener("touchstart",e=>{ keys.left=true; e.preventDefault(); });
+leftBtn.addEventListener("touchend",e=>{ keys.left=false; e.preventDefault(); });
+rightBtn.addEventListener("touchstart",e=>{ keys.right=true; e.preventDefault(); });
+rightBtn.addEventListener("touchend",e=>{ keys.right=false; e.preventDefault(); });
+jumpBtn.addEventListener("touchstart",e=>{ keys.jump=true; e.preventDefault(); });
+jumpBtn.addEventListener("touchend",e=>{ keys.jump=false; e.preventDefault(); });
+
+// bàn phím fallback
+window.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft") keys.left=true;
+  if(e.key==="ArrowRight") keys.right=true;
+  if(e.key===" "|| e.key==="ArrowUp"){ keys.jump=true; playJump(); }
+});
+window.addEventListener("keyup",e=>{
+  if(e.key==="ArrowLeft") keys.left=false;
+  if(e.key==="ArrowRight") keys.right=false;
+  if(e.key===" "|| e.key==="ArrowUp") keys.jump=false;
+});
+
+// bắt đầu
+document.getElementById("startBtn").onclick=()=>{ reset(); };
+canvas.addEventListener("touchstart",e=>{
+  if(gameState==="start") reset();
+  if(gameState==="win"||gameState==="lose") reset();
+});
+
+reset();
+loop();
+</script>
+</body>
+</html>
